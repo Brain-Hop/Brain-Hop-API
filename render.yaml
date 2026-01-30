@@ -28,12 +28,9 @@ services:
     dockerContext: .
     plan: free
     envVars:
-      # Magic: Automatically gets the URL of the chatbot service!
+      # Internal Docker Networking: http://<service-name>:<port>
       - key: RAG_BASE_URL
-        fromService:
-          type: web
-          name: brain-hop-chatbot
-          property: url
+        value: http://brain-hop-chatbot:5001
       - key: SUPABASE_URL
         sync: false
       - key: SUPABASE_KEY
