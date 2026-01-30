@@ -1,0 +1,40 @@
+services:
+  # 1. Python Chatbot (The Logic)
+  - type: web
+    name: brain-hop-chatbot
+    env: docker
+    # Points to Brain-Hop-API/chatbot inside the repo
+    # If this file is in the root of Brain-Hop-API repo, then:
+    dockerContext: ./chatbot
+    plan: free
+    envVars:
+      - key: PORT
+        value: 5001
+      - key: PYTHONUNBUFFERED
+        value: 1
+      # User must fill these in Render Dashboard
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_KEY
+        sync: false
+      - key: OPENROUTER_API_KEY
+        sync: false
+
+  # 2. Node.js API (The Gateway)
+  - type: web
+    name: brain-hop-api
+    env: docker
+    # Points to root of Brain-Hop-API repo
+    dockerContext: .
+    plan: free
+    envVars:
+      # Magic: Automatically gets the URL of the chatbot service!
+      - key: RAG_BASE_URL
+        fromService:
+          type: web
+          name: brain-hop-chatbot
+          property: url
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_KEY
+        sync: false
