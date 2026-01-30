@@ -5,7 +5,7 @@ module.exports = async function logout(req) {
   // curl.exe -i -X POST "http://localhost:3001/api/auth/logout" -H "Content-Type: application/json" -d "{}"
 
   try {
-    const { supabase } = require('./supabase');
+    const { supabase } = require('../utils/supabase');
 
     // Call supabase signOut. On the server this will clear the client's session
     // if it has one. For stateless JWTs the client should also remove the token.

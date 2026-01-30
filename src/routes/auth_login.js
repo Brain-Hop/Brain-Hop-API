@@ -15,7 +15,7 @@ module.exports = async function login(req) {
     return { status: 400, error: 'email and password are required' };
   }
   try {
-    const { supabase } = require('./supabase');
+    const { supabase } = require('../utils/supabase');
 
     // If a provider is present, start OAuth flow (GitHub / Google)
     if (provider) {
@@ -75,7 +75,7 @@ module.exports = async function login(req) {
       console.log(`[AUTH] Password login successful for ${safeUser.email || safeUser.id || 'unknown user'}`);
       
       // Create or update profile entry in profiles table
-      const { upsertProfile } = require('./profile_helpers');
+      const { upsertProfile } = require('../utils/profile_helpers');
       if (safeUser.id) {
         const profileResult = await upsertProfile(supabase, safeUser.id, {
           email: user.email,

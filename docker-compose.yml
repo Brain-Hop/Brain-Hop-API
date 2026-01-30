@@ -1,0 +1,33 @@
+version: '3.8'
+
+services:
+  # The Python RAG Service
+  chatbot:
+    # Build context is relative to this file (root of Brain-Hop-Complete)
+    # Build context is relative to this file (now inside Brain-Hop-API)
+    build: ./chatbot
+    container_name: brain-hop-chatbot
+    ports:
+      - "5001:5001"
+    environment:
+      - PORT=5001
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_KEY=${SUPABASE_KEY}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+    restart: unless-stopped
+
+  # The Node.js API Service
+  api:
+    build: .
+    container_name: brain-hop-api
+    ports:
+      - "3001:3001"
+    environment:
+      - PORT=3001
+      # Docker network alias: "chatbot" refers to the service name above
+      - RAG_BASE_URL=http://chatbot:5001
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_KEY=${SUPABASE_KEY}
+    depends_on:
+      - chatbot
+    restart: unless-stopped

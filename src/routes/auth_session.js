@@ -7,8 +7,8 @@ module.exports = async function session(req) {
   }
 
   try {
-    const { supabase } = require('./supabase');
-    const { upsertProfile } = require('./profile_helpers');
+    const { supabase } = require('../utils/supabase');
+    const { upsertProfile } = require('../utils/profile_helpers');
 
     const { data, error } = await supabase.auth.getUser(accessToken);
     if (error) {

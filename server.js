@@ -6,14 +6,14 @@ const multer = require('multer');
 const mime = require('mime-types');
 
 // Shared Supabase client (single source of truth)
-const { supabase } = require('./supabase');
+const { supabase } = require('./src/utils/supabase');
 
 // -------------------- CONFIG --------------------
 const app = express();
 const port = 3001;
 
-// Point this to your Flask MULTI-CHAT RAG service (NOT the ngrok inspector page!)
-const RAG_BASE_URL ='https://wholistic-felicidad-crankily.ngrok-free.dev';
+// Point this to your Flask MULTI-CHAT RAG service
+const RAG_BASE_URL = process.env.RAG_BASE_URL || 'http://localhost:5001';
 
 // JSON body limits (allow some headroom if questions get long)
 app.use(cors());
@@ -31,7 +31,7 @@ app.get('/api/test', (_req, res) => {
 });
 
 // -------------------- AUTH ENDPOINTS --------------------
-const loginHandler = require('./auth_login');
+const loginHandler = require('./src/routes/auth_login');
 app.post('/api/auth/login', async (req, res) => {
   try {
     const result = await loginHandler(req);
@@ -47,7 +47,7 @@ app.post('/api/auth/login', async (req, res) => {
   }
 });
 
-const signupHandler = require('./auth_signup');
+const signupHandler = require('./src/routes/auth_signup');
 app.post('/api/auth/signup', async (req, res) => {
   try {
     const result = await signupHandler(req);
@@ -59,7 +59,7 @@ app.post('/api/auth/signup', async (req, res) => {
   }
 });
 
-const sessionHandler = require('./auth_session');
+const sessionHandler = require('./src/routes/auth_session');
 app.post('/api/auth/session', async (req, res) => {
   try {
     const result = await sessionHandler(req);
@@ -71,7 +71,7 @@ app.post('/api/auth/session', async (req, res) => {
   }
 });
 
-const logoutHandler = require('./auth_logout');
+const logoutHandler = require('./src/routes/auth_logout');
 app.post('/api/auth/logout', async (req, res) => {
   try {
     const result = await logoutHandler(req);
@@ -291,7 +291,7 @@ app.post('/api/chats/save', async (req, res) => {
       return res.status(400).json({ error: 'user_id is required' });
     }
 
-    const { upsertChat } = require('./chat_helpers');
+    const { upsertChat } = require('./src/utils/chat_helpers');
     const result = await upsertChat(supabase, user_id, chat_id, {
       title: title || 'New Conversation',
       zip_file_url: zip_file_url || '',
@@ -332,7 +332,7 @@ app.post('/api/chats/sync', async (req, res) => {
 
     console.log(`[CHAT SYNC] Syncing ${chats.length} chats to Supabase...`);
 
-    const { upsertChat } = require('./chat_helpers');
+    const { upsertChat } = require('./src/utils/chat_helpers');
     const results = [];
     const errors = [];
 
@@ -379,6 +379,11 @@ app.post('/api/chats/sync', async (req, res) => {
     return res.status(500).json({ error: 'Failed to sync chats' });
   }
 });
+
+// -------------------- PRIVACY & TERMS --------------------
+app.get('/privacy', require('./src/routes/privacy'));
+app.get('/terms', require('./src/routes/terms'));
+app.get('/api/stats', require('./src/routes/stats'));
 
 // -------------------- START SERVER --------------------
 app.listen(port, () => {

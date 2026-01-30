@@ -1,1 +1,11 @@
 node_modules/
+
+# Python
+chatbot/__pycache__/
+chatbot/*.py[cod]
+chatbot/*$py.class
+chatbot/venv/
+chatbot/env/
+chatbot/vector_store_*
+chatbot/*.zip
+chatbot/temp_images/

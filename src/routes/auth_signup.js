@@ -20,8 +20,8 @@ module.exports = async function signup(req) {
   }
 
   try {
-    const { supabase } = require('./supabase');
-    const { upsertProfile } = require('./profile_helpers');
+    const { supabase } = require('../utils/supabase');
+    const { upsertProfile } = require('../utils/profile_helpers');
 
     // Call signUp without user metadata (we don't accept name)
     const result = await supabase.auth.signUp({ email, password });
