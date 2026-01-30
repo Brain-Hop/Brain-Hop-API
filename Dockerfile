@@ -2,7 +2,8 @@ FROM node:18-alpine
 
 WORKDIR /app
 
-COPY package*.json ./
+# Copy package.json and lockfile (if exists)
+COPY package.json package-lock.json* ./
 # Use npm install which generates lockfile if missing (more robust for initial deploy)
 RUN npm install --production
 
