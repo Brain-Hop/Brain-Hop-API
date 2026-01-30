@@ -314,6 +314,32 @@ app.post('/api/chats/save', async (req, res) => {
 });
 
 /**
+ * GET /api/chats
+ * query: user_id
+ * Returns list of chats for the user
+ */
+app.get('/api/chats', async (req, res) => {
+  try {
+    const { user_id } = req.query;
+    if (!user_id) {
+      return res.status(400).json({ error: 'user_id query param is required' });
+    }
+
+    const { getChats } = require('./src/utils/chat_helpers');
+    const result = await getChats(supabase, user_id);
+
+    if (result.error) {
+      return res.status(500).json({ error: result.error });
+    }
+
+    return res.status(200).json({ chats: result.data });
+  } catch (err) {
+    console.error('[CHAT] GET /api/chats error:', err?.message || err);
+    return res.status(500).json({ error: 'Failed to fetch chats' });
+  }
+});
+
+/**
  * POST /api/chats/sync
  * Body: { chats: Array<chatRecord> }
  * Batch syncs multiple chats to Supabase (upsert for each)

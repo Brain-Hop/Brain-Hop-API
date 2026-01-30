@@ -147,5 +147,36 @@ async function upsertChat(supabase, userId, chatId = null, chatData = {}) {
   }
 }
 
-module.exports = { generateChatId, getNextChatNumber, upsertChat };
+/**
+ * Get all chats for a user
+ * @param {Object} supabase - Supabase client instance
+ * @param {string} userId - User ID
+ * @returns {Promise<Object>} - Result with data (list of chats) or error
+ */
+async function getChats(supabase, userId) {
+  if (!userId) {
+    return { error: 'User ID is required' };
+  }
+
+  try {
+    const { data, error } = await supabase
+      .from('chats')
+      .select('*')
+      .eq('user_id', userId)
+      .order('updated_at', { ascending: false });
+
+    if (error) {
+      console.error('[CHAT] Error fetching chats:', error);
+      return { error: error.message || 'Failed to fetch chats' };
+    }
+
+    return { data };
+  } catch (err) {
+    console.error('[CHAT] Unexpected error fetching chats:', err);
+    return { error: err.message || 'Chat fetch failed' };
+  }
+}
+
+module.exports = { generateChatId, getNextChatNumber, upsertChat, getChats };
+
 
