@@ -254,7 +254,7 @@ app.post('/api/rag/merge_chats', async (req, res) => {
     const response = await axios.post(
       `${RAG_BASE_URL}/merge_chats`,
       { user_id, new_chat_id, merge_chat_ids },
-      { timeout: 30000, validateStatus: () => true }
+      { timeout: 120000, validateStatus: () => true }
     );
 
     const short =

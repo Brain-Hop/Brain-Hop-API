@@ -9,7 +9,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_classic.chains.combine_documents import create_stuff_documents_chain
 from langchain_classic.chains import create_retrieval_chain
 from supabase import create_client
-import os, shutil, zipfile, time, base64, threading
+import os, shutil, zipfile, time, base64, threading, contextlib
 
 # =========================================================
 # SETUP
@@ -37,11 +37,27 @@ print("✅ Embedding Model Loaded!", flush=True)
 
 loaded_vectorstores = {}
 chat_history = {}
+loaded_vectorstores = {}
+chat_history = {}
 last_active = {}
+chat_locks = {}  # Stores threading.Lock() for each (user_id, chat_id)
 
 # =========================================================
 # HELPERS
 # =========================================================
+@contextlib.contextmanager
+def get_chat_lock(user_id, chat_id):
+    key = (user_id, chat_id)
+    if key not in chat_locks:
+        chat_locks[key] = threading.Lock()
+    
+    lock = chat_locks[key]
+    lock.acquire()
+    try:
+        yield
+    finally:
+        lock.release()
+
 def local_dir(user_id, chat_id):
     return os.path.join("/tmp", f"vector_store_{user_id}_{chat_id}")
 
@@ -95,6 +111,9 @@ def load_vectorstore_from_supabase(user_id, chat_id):
 
     try:
         print(f"📥 Downloading {vector_zip_name(user_id, chat_id)} from Supabase...")
+        # Clean up any existing directory to avoid conflicts
+        shutil.rmtree(local_path, ignore_errors=True)
+        
         with open(zip_path, "wb") as f:
             res = supabase.storage.from_("chat_vectors").download(vector_zip_name(user_id, chat_id))
             f.write(res)
@@ -113,7 +132,8 @@ def load_vectorstore_from_supabase(user_id, chat_id):
     return vs
 
 def persist_and_upload_vectorstore(user_id, chat_id):
-    key = (user_id, chat_id)
+    with get_chat_lock(user_id, chat_id):
+        key = (user_id, chat_id)
     if key not in loaded_vectorstores:
         return {"error": "no vectorstore found"}
 
@@ -155,11 +175,12 @@ def add_message(user_id, chat_id, role, text, has_image=False, image_name=None):
     }
     chat_history[key].append(msg)
 
-    vs = load_vectorstore_from_supabase(user_id, chat_id)
-    chunks = split_text(f"[{chat_number}] {role}: {text}")
-    docs = [Document(page_content=c, metadata={"role": role, "chat_number": chat_number}) for c in chunks]
-    vs.add_documents(docs)
-    last_active[key] = time.time()
+    with get_chat_lock(user_id, chat_id):
+        vs = load_vectorstore_from_supabase(user_id, chat_id)
+        chunks = split_text(f"[{chat_number}] {role}: {text}")
+        docs = [Document(page_content=c, metadata={"role": role, "chat_number": chat_number}) for c in chunks]
+        vs.add_documents(docs)
+        last_active[key] = time.time()
 
 # =========================================================
 # RAG PIPELINE + IMAGE CAPTION
@@ -231,7 +252,18 @@ def chat():
     if not all([user_id, chat_id, model_name, question]):
         return jsonify({"error": "Missing fields"}), 400
 
-    vs = load_vectorstore_from_supabase(user_id, chat_id)
+    # vs loading moved inside locks where needed, except for initial read if safe
+    # actually, load_vectorstore_from_supabase modifies global loaded_vectorstores, so we should allow it to be called safely.
+    # But here we are just reading vs for RAG chain. The RAG chain itself reads from VS.
+    
+    # We will lock the critical section of adding the message and updating the vectorstore.
+    # The read (building RAG chain and invoking it) might also need locking if ChromaDB doesn't support concurrent read/write well,
+    # but the error reported was specifically about WRITING to a readonly database (likely moved/deleted).
+    
+    # Let's lock the whole interaction for safety for now, or at least the write parts.
+    # Optimally: lock for add_message (write), lock for RAG (read) if strict.
+    # Given the previous error was on 'upsert' inside add_documents, let's look at add_message usage.
+    
     image_caption = ""
 
     if has_image and image_name:
@@ -244,16 +276,19 @@ def chat():
     if image_caption:
         add_message(user_id, chat_id, "assistant", f"Image Description: {image_caption}")
 
-    rag_chain = build_rag_chain(vs, model_name)
-    chat_context = get_recent_chat_context(user_id, chat_id)
+    # Re-acquire lock for reading to be safe against concurrent deletions
+    with get_chat_lock(user_id, chat_id):
+        vs = load_vectorstore_from_supabase(user_id, chat_id)
+        rag_chain = build_rag_chain(vs, model_name)
+        chat_context = get_recent_chat_context(user_id, chat_id)
 
-    try:
-        rag_input = {"input": f"{chat_context}\n\n{question}", "chat_history": chat_context}
-        result = rag_chain.invoke(rag_input)
-        response = result.get("answer", "").strip()
-    except Exception as e:
-        print("❌ RAG Error:", e)
-        response = "Sorry, something went wrong while processing your request."
+        try:
+            rag_input = {"input": f"{chat_context}\n\n{question}", "chat_history": chat_context}
+            result = rag_chain.invoke(rag_input)
+            response = result.get("answer", "").strip()
+        except Exception as e:
+            print("❌ RAG Error:", e)
+            response = "Sorry, something went wrong while processing your request."
 
     add_message(user_id, chat_id, "assistant", response)
     threading.Thread(target=cleanup_temp_images, daemon=True).start()
@@ -277,34 +312,48 @@ def merge_chats():
     if not user_id or not new_chat_id or not merge_chat_ids:
         return jsonify({"error": "Missing required fields"}), 400
 
-    new_local = local_dir(user_id, new_chat_id)
-    os.makedirs(new_local, exist_ok=True)
-    merged_vs = Chroma(persist_directory=new_local, embedding_function=embedding_model)
+    # Ensure we don't have a stale loaded VS for the new chat
+    key = (user_id, new_chat_id)
+    if key in loaded_vectorstores:
+        del loaded_vectorstores[key]
+    if key in chat_history:
+        del chat_history[key]
 
-    print(f"🔄 Merging chats {merge_chat_ids} → {new_chat_id}")
-    for cid in merge_chat_ids:
-        try:
-            temp_vs = load_vectorstore_from_supabase(user_id, cid)
-            docs = temp_vs.get(include=["metadatas", "documents"])
-            all_docs = [Document(page_content=d, metadata=m) for d, m in zip(docs["documents"], docs["metadatas"])]
-            merged_vs.add_documents(all_docs)
-            print(f"✅ Added {len(all_docs)} docs from {cid}")
-        except Exception as e:
-            print(f"⚠️ Failed to merge {cid}: {e}")
+    # We lock the target chat ID during creation to prevent race conditions
+    with get_chat_lock(user_id, new_chat_id):
+        # Use a true temporary directory to avoid colliding with any "active" chat path
+        # causing "database is locked" or "readonly" errors if add_message tries to read it.
+        temp_merge_dir = os.path.join("/tmp", f"merge_{user_id}_{new_chat_id}_{int(time.time())}")
+        os.makedirs(temp_merge_dir, exist_ok=True)
+        
+        merged_vs = Chroma(persist_directory=temp_merge_dir, embedding_function=embedding_model)
 
-    merged_vs.persist()
-    loaded_vectorstores[(user_id, new_chat_id)] = merged_vs
-    chat_history[(user_id, new_chat_id)] = []
-    last_active[(user_id, new_chat_id)] = time.time()
+        print(f"🔄 Merging chats {merge_chat_ids} → {new_chat_id}")
+        for cid in merge_chat_ids:
+            # Lock each source chat while reading
+            with get_chat_lock(user_id, cid):
+                try:
+                    temp_vs = load_vectorstore_from_supabase(user_id, cid)
+                    docs = temp_vs.get(include=["metadatas", "documents"])
+                    if docs["documents"]:
+                        all_docs = [Document(page_content=d, metadata=m) for d, m in zip(docs["documents"], docs["metadatas"])]
+                        merged_vs.add_documents(all_docs)
+                        print(f"✅ Added {len(all_docs)} docs from {cid}")
+                except Exception as e:
+                    print(f"⚠️ Failed to merge {cid}: {e}")
 
-    shutil.make_archive(new_local, "zip", new_local)
-    with open(f"{new_local}.zip", "rb") as f:
-        supabase.storage.from_("chat_vectors").upload(
-            vector_zip_name(user_id, new_chat_id), f, {"x-upsert": "true"}
-        )
+        merged_vs.persist()
+        # DO NOT add to loaded_vectorstores here because we are about to delete the directory!
+        
+        shutil.make_archive(temp_merge_dir, "zip", temp_merge_dir)
+        with open(f"{temp_merge_dir}.zip", "rb") as f:
+            supabase.storage.from_("chat_vectors").upload(
+                vector_zip_name(user_id, new_chat_id), f, {"x-upsert": "true"}
+            )
 
-    shutil.rmtree(new_local, ignore_errors=True)
-    os.remove(f"{new_local}.zip")
+        print(f"💾 Uploaded merged DB for {user_id}-{new_chat_id}")
+        shutil.rmtree(temp_merge_dir, ignore_errors=True)
+        os.remove(f"{temp_merge_dir}.zip")
 
     return jsonify({"status": "merged", "new_chat_id": new_chat_id})
 
