@@ -1,0 +1,123 @@
+# OpenRouter Mini — Architecture Analysis
+
+## TL;DR — Single API, Not Multiple
+
+**Your project creates a SINGLE unified API endpoint** (`POST /api/v1/chat/completions`) that routes to multiple LLM providers behind the scenes. This is exactly how the real OpenRouter works — one API, many models.
+
+---
+
+## Monorepo Structure
+
+```
+openrouter/                   ← Turborepo monorepo (Bun)
+├── apps/
+│   ├── api-backend/          ← LLM proxy (port 4000) — the core
+│   ├── primary-backend/      ← Dashboard API (port 3000)
+│   └── dashboard-frontend/   ← UI
+├── packages/
+│   ├── db/                   ← Prisma + PostgreSQL
+│   ├── ui/                   ← Shared UI components
+│   ├── eslint-config/
+│   └── typescript-config/
+```
+
+---
+
+## How It Works — Request Flow
+
+```mermaid
+sequenceDiagram
+    participant Client
+    participant API as api-backend<br/>POST /api/v1/chat/completions
+    participant DB as PostgreSQL
+    participant LLM as LLM Provider
+
+    Client->>API: { model: "google/gemini-2.0-flash", messages: [...] }
+    API->>DB: Validate API key (Bearer token)
+    API->>DB: Check user credits > 0
+    API->>DB: Look up model by slug
+    API->>DB: Get providers for this model (ModelProviderMapping)
+    Note over API: Randomly pick a provider if multiple exist
+    API->>LLM: Forward request to Gemini / OpenAI / Claude
+    LLM-->>API: Response + token usage
+    API->>DB: Deduct credits from user
+    API->>DB: Track credits consumed on API key
+    API-->>Client: Unified response format
+```
+
+### Key Steps in [index.ts](file:///c:/Users/siddh/Brain%20Hop%20complete/openrouter/apps/api-backend/src/index.ts):
+
+1. **Parse model slug** — splits `"google/gemini-2.0-flash"` into company + model name
+2. **Validate API key** — looks up [ApiKey](file:///c:/Users/siddh/Brain%20Hop%20complete/openrouter/apps/primary-backend/src/modules/apiKeys/service.ts#36-53) in DB, checks not disabled/deleted
+3. **Check credits** — ensures user has credits remaining
+4. **Resolve model** — finds the [Model](file:///c:/Users/siddh/Brain%20Hop%20complete/openrouter/apps/primary-backend/src/modules/models/service.ts#5-23) record by slug
+5. **Pick a provider** — randomly selects from `ModelProviderMapping` entries (load balancing)
+6. **Route to adapter** — dispatches to [Gemini](file:///c:/Users/siddh/Brain%20Hop%20complete/openrouter/apps/api-backend/src/llms/Gemini.ts#10-33), [OpenAi](file:///c:/Users/siddh/Brain%20Hop%20complete/openrouter/apps/api-backend/src/llms/OpenAi.ts#8-31), or [Claude](file:///c:/Users/siddh/Brain%20Hop%20complete/openrouter/apps/api-backend/src/llms/Claude.ts#11-37) class based on provider name
+7. **Calculate cost** — [(inputTokens × inputCost + outputTokens × outputCost) / 10](file:///c:/Users/siddh/Brain%20Hop%20complete/openrouter/apps/primary-backend/src/app.ts#13-14)
+8. **Deduct credits** — decrements user credits and increments API key usage tracking
+
+---
+
+## LLM Adapter Pattern
+
+All adapters extend [BaseLlm](file:///c:/Users/siddh/Brain%20Hop%20complete/openrouter/apps/api-backend/src/llms/Base.ts) and return a unified [LlmResponse](file:///c:/Users/siddh/Brain%20Hop%20complete/openrouter/apps/api-backend/src/llms/Base.ts#3-14):
+
+| Adapter | SDK | Provider Names |
+|---|---|---|
+| [Gemini.ts](file:///c:/Users/siddh/Brain%20Hop%20complete/openrouter/apps/api-backend/src/llms/Gemini.ts) | `@google/genai` | "Google API", "Google Vertex" |
+| [Claude.ts](file:///c:/Users/siddh/Brain%20Hop%20complete/openrouter/apps/api-backend/src/llms/Claude.ts) | `@anthropic-ai/sdk` | "Claude API" |
+| [OpenAi.ts](file:///c:/Users/siddh/Brain%20Hop%20complete/openrouter/apps/api-backend/src/llms/OpenAi.ts) | `openai` | "OpenAI" |
+
+Each adapter normalizes the provider-specific response into:
+```ts
+{
+  completions: { choices: [{ message: { content: string } }] },
+  inputTokensConsumed: number,
+  outputTokensConsumed: number
+}
+```
+
+---
+
+## Database Schema
+
+```mermaid
+erDiagram
+    User ||--o{ ApiKey : "has many"
+    User ||--o{ OnrampTransaction : "has many"
+    User ||--o{ Conversation : "has many"
+    Company ||--o{ Model : "has many"
+    Model ||--o{ ModelProviderMapping : "available via"
+    Provider ||--o{ ModelProviderMapping : "serves"
+    ApiKey ||--o{ Conversation : "used in"
+    ModelProviderMapping ||--o{ Conversation : "routed through"
+```
+
+> [!IMPORTANT]
+> The **`ModelProviderMapping`** table is the key to the routing. A single model (e.g. GPT-4) can map to multiple providers, each with different token costs. The API randomly picks one at request time.
+
+---
+
+## Dashboard API (`primary-backend` on port 3000)
+
+Separate Elysia app with 4 modules:
+
+| Module | Purpose |
+|---|---|
+| **auth** | Signup/signin with password hashing (`Bun.password.hash`), JWT |
+| **apiKeys** | Create (`sk-or-v1-...`), list, enable/disable, soft-delete API keys |
+| **models** | List available models, providers, and their mappings |
+| **payments** | Credit onramp (+1000 credits per transaction, uses DB transactions) |
+
+---
+
+## Summary
+
+| Question | Answer |
+|---|---|
+| **Single or multiple APIs?** | **Single endpoint** — `POST /api/v1/chat/completions` |
+| **How does routing work?** | Model slug → DB lookup → random provider selection → adapter dispatch |
+| **What providers?** | Google (Gemini), Anthropic (Claude), OpenAI |
+| **How are costs tracked?** | Per-token costs stored in `ModelProviderMapping`, deducted from user credits |
+| **How are keys formatted?** | `sk-or-v1-{20 random chars}` |
+| **Tech stack** | Bun + Elysia + Prisma + PostgreSQL + Turborepo |
