@@ -54,9 +54,9 @@ async function upsertChat(supabase, userId, chatId = null, chatData = {}) {
   try {
     const now = new Date().toISOString();
     
-    // Check if this is an update to an existing chat
+    // Client UUIDs are stable identifiers. Preserve them on first insert so a
+    // later sync updates the same chat instead of creating a duplicate.
     let finalChatId = chatId;
-    let isNewChat = false;
     
     if (finalChatId) {
       // Validate that chatId is a valid UUID format
@@ -65,26 +65,10 @@ async function upsertChat(supabase, userId, chatId = null, chatData = {}) {
         // If provided chat_id is not a valid UUID, generate a new one
         console.warn(`[CHAT] Invalid UUID format for chat_id: ${finalChatId}, generating new UUID`);
         finalChatId = generateChatId();
-        isNewChat = true;
-      } else {
-        // Check if chat exists with this ID and belongs to this user
-        const { data: existingChat, error: fetchError } = await supabase
-          .from('chats')
-          .select('chat_id')
-          .eq('chat_id', finalChatId)
-          .eq('user_id', userId)
-          .single();
-        
-        if (!existingChat || fetchError) {
-          // If chat_id provided but doesn't exist, generate a new UUID
-          finalChatId = generateChatId();
-          isNewChat = true;
-        }
       }
     } else {
       // Generate new chat_id as UUID
       finalChatId = generateChatId();
-      isNewChat = true;
     }
 
     // Final check if chat exists (for update path)
@@ -106,7 +90,7 @@ async function upsertChat(supabase, userId, chatId = null, chatData = {}) {
     };
 
     let result;
-    if (existingChat && !fetchError && !isNewChat) {
+    if (existingChat && !fetchError) {
       // Update existing chat
       const { data, error } = await supabase
         .from('chats')

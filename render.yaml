@@ -8,8 +8,6 @@ services:
     dockerContext: ./chatbot
     plan: free
     envVars:
-      - key: PORT
-        value: 5001
       - key: PYTHONUNBUFFERED
         value: 1
       # User must fill these in Render Dashboard
@@ -18,6 +16,8 @@ services:
       - key: SUPABASE_KEY
         sync: false
       - key: OPENROUTER_API_KEY
+        sync: false
+      - key: RAG_INTERNAL_TOKEN
         sync: false
 
   # 2. Node.js API (The Gateway)
@@ -28,10 +28,18 @@ services:
     dockerContext: .
     plan: free
     envVars:
-      # Internal Docker Networking: http://<service-name>:<port>
+      # Free Render services cannot receive private-network traffic. After the
+      # chatbot deploys, set this to its public Render URL in the dashboard.
+      # The chatbot still rejects every request without RAG_INTERNAL_TOKEN.
       - key: RAG_BASE_URL
-        value: http://brain-hop-chatbot:5001
+        sync: false
       - key: SUPABASE_URL
         sync: false
       - key: SUPABASE_KEY
+        sync: false
+      - key: RAG_INTERNAL_TOKEN
+        sync: false
+      - key: FRONTEND_URL
+        sync: false
+      - key: CORS_ALLOWED_ORIGINS
         sync: false
