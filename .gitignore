@@ -1,4 +1,7 @@
 node_modules/
+.env
+.env.*
+!.env.example
 
 # Python
 chatbot/__pycache__/
@@ -9,3 +12,4 @@ chatbot/env/
 chatbot/vector_store_*
 chatbot/*.zip
 chatbot/temp_images/
+venv

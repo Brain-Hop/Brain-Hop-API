@@ -10,10 +10,11 @@ services:
     ports:
       - "5001:5001"
     environment:
-      - PORT=5001
+      - RAG_PORT=5001
       - SUPABASE_URL=${SUPABASE_URL}
       - SUPABASE_KEY=${SUPABASE_KEY}
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - RAG_INTERNAL_TOKEN=${RAG_INTERNAL_TOKEN}
     volumes:
       - ./chatbot:/app
     restart: unless-stopped
@@ -30,10 +31,11 @@ services:
       - RAG_BASE_URL=http://chatbot:5001
       - SUPABASE_URL=${SUPABASE_URL}
       - SUPABASE_KEY=${SUPABASE_KEY}
+      - RAG_INTERNAL_TOKEN=${RAG_INTERNAL_TOKEN}
     volumes:
       - .:/app
       - /app/node_modules
-    command: sh -c "npx nodemon server.js"
+    command: node server.js
     depends_on:
       - chatbot
     restart: unless-stopped

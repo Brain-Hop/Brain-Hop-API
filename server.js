@@ -7,17 +7,70 @@ const mime = require('mime-types');
 
 // Shared Supabase client (single source of truth)
 const { supabase } = require('./src/utils/supabase');
+const { requireAuth, assertRequestedUser } = require('./src/middleware/auth');
 
 // -------------------- CONFIG --------------------
 const app = express();
-const port = 3001;
+const port = Number(process.env.PORT || 3001);
 
 // Point this to your Flask MULTI-CHAT RAG service
-const RAG_BASE_URL = process.env.RAG_BASE_URL || 'http://localhost:5001';
+const RAG_BASE_URL = process.env.RAG_BASE_URL || (process.env.RAG_HOSTPORT ? `http://${process.env.RAG_HOSTPORT}` : 'http://localhost:5001');
+const RAG_TIMEOUT_MS = Number(process.env.RAG_TIMEOUT_MS || 90_000);
+const RAG_INTERNAL_TOKEN = process.env.RAG_INTERNAL_TOKEN;
+
+if (!RAG_INTERNAL_TOKEN) {
+  throw new Error('RAG_INTERNAL_TOKEN must be configured');
+}
 
 // JSON body limits (allow some headroom if questions get long)
-app.use(cors());
+function parseOrigins(...values) {
+  return values
+    .flatMap((value) => String(value || '').split(','))
+    .map((origin) => origin.trim().replace(/\/$/, ''))
+    .filter(Boolean);
+}
+
+const allowedOrigins = new Set(
+  parseOrigins(
+    process.env.FRONTEND_URL,
+    process.env.CORS_ALLOWED_ORIGINS,
+    'http://localhost:8080',
+    'http://localhost:5173'
+  )
+);
+app.use(cors({
+  origin(origin, callback) {
+    const normalizedOrigin = String(origin || '').replace(/\/$/, '');
+    if (!origin || allowedOrigins.has(normalizedOrigin)) return callback(null, true);
+    return callback(new Error('Origin is not allowed by CORS'));
+  },
+  methods: ['GET', 'POST', 'DELETE'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'ngrok-skip-browser-warning'],
+  maxAge: 86_400,
+  optionsSuccessStatus: 204,
+}));
 app.use(express.json({ limit: '10mb' }));
+app.use((_req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  next();
+});
+
+const requestBuckets = new Map();
+app.use('/api', (req, res, next) => {
+  const key = req.ip || 'unknown';
+  const now = Date.now();
+  const bucket = requestBuckets.get(key) || { startedAt: now, count: 0 };
+  if (now - bucket.startedAt > 60_000) {
+    bucket.startedAt = now;
+    bucket.count = 0;
+  }
+  bucket.count += 1;
+  requestBuckets.set(key, bucket);
+  if (bucket.count > 120) return res.status(429).json({ error: 'Too many requests. Try again shortly.' });
+  return next();
+});
 
 // Middleware to log every incoming request
 app.use((req, _res, next) => {
@@ -29,6 +82,9 @@ app.use((req, _res, next) => {
 app.get('/api/test', (_req, res) => {
   res.json({ message: 'Hello from the backend!' });
 });
+app.get('/api/health', (_req, res) => {
+  res.json({ status: 'ok', service: 'brain-hop-api', timestamp: new Date().toISOString() });
+});
 
 // -------------------- AUTH ENDPOINTS --------------------
 const loginHandler = require('./src/routes/auth_login');
@@ -38,9 +94,6 @@ app.post('/api/auth/login', async (req, res) => {
     const status = result?.status || 200;
     const { status: _s, ...payload } = result || {};
 
-    if (payload?.token) {
-      console.log(`[AUTH] Access token (truncated): ${String(payload.token).slice(0, 12)}...`);
-    }
     return res.status(status).json(payload);
   } catch (err) {
     return res.status(500).json({ error: err?.message || String(err) });
@@ -90,7 +143,14 @@ function sanitizeFilename(name) {
 
 // -------------------- IMAGE UPLOAD (Supabase) --------------------
 // Accepts multipart/form-data: fields => user_id, chat_id; file => image
-const uploadMemory = multer({ storage: multer.memoryStorage() });
+const uploadMemory = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024, files: 1 },
+  fileFilter: (_req, file, callback) => {
+    const allowed = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif']);
+    callback(null, allowed.has(file.mimetype));
+  },
+});
 
 /**
  * POST /api/rag/image
@@ -104,13 +164,13 @@ const uploadMemory = multer({ storage: multer.memoryStorage() });
  *   Your Flask will download it via:
  *     supabase.storage.from_("chat_vectors").download(image_name)
  */
-app.post('/api/rag/image', uploadMemory.single('image'), async (req, res) => {
+app.post('/api/rag/image', requireAuth, uploadMemory.single('image'), async (req, res) => {
   try {
     const { user_id, chat_id } = req.body || {};
     const file = req.file;
 
-    if (!user_id || !chat_id) {
-      return res.status(400).json({ error: 'user_id and chat_id are required' });
+    if (!assertRequestedUser(req, user_id) || !chat_id) {
+      return res.status(400).json({ error: 'A valid chat_id is required' });
     }
     if (!file) {
       return res.status(400).json({ error: 'image file is required (field name: image)' });
@@ -124,7 +184,7 @@ app.post('/api/rag/image', uploadMemory.single('image'), async (req, res) => {
     const base = original.replace(/\.[^/.]+$/, '');
     const filename = `${base}.${ext}`;
 
-    const storagePath = `images/${user_id}/${chat_id}/${stamp}-${rand}-${filename}`.replace(/\.+\./g, '.');
+    const storagePath = `images/${req.user.id}/${chat_id}/${stamp}-${rand}-${filename}`.replace(/\.+\./g, '.');
 
     const { error } = await supabase.storage
       .from('chat_vectors')
@@ -139,7 +199,7 @@ app.post('/api/rag/image', uploadMemory.single('image'), async (req, res) => {
     }
 
     console.log(`[UPLOAD] Saved to Supabase: ${storagePath}`);
-    return res.status(201).json({ image_name: storagePath });
+    return res.status(201).json({ image_name: storagePath, image_type: file.mimetype });
   } catch (e) {
     console.error('[UPLOAD] /api/rag/image error:', e?.message || e);
     return res.status(500).json({ error: 'Image upload failed' });
@@ -158,11 +218,11 @@ app.post('/api/rag/image', uploadMemory.single('image'), async (req, res) => {
  *  - image_name (optional)  -> if provided, we set has_image=true automatically
  *  - has_image (optional)   -> overrides auto-detect if provided as true
  */
-app.post('/api/rag/chat', async (req, res) => {
+app.post('/api/rag/chat', requireAuth, async (req, res) => {
   try {
     const { user_id, chat_id, model_name, question, image_name, has_image } = req.body || {};
-    if (!user_id || !chat_id || !model_name || !question) {
-      return res.status(400).json({ error: 'user_id, chat_id, model_name, and question are required' });
+    if (!assertRequestedUser(req, user_id) || !chat_id || !model_name || !question || typeof question !== 'string' || question.length > 20_000) {
+      return res.status(400).json({ error: 'A valid chat_id, model_name, and question (up to 20,000 characters) are required' });
     }
 
     // Auto determine has_image if not explicitly provided
@@ -172,7 +232,7 @@ app.post('/api/rag/chat', async (req, res) => {
         : Boolean(image_name);
 
     const payload = {
-      user_id,
+      user_id: req.user.id,
       chat_id,
       model_name,
       question,
@@ -180,13 +240,13 @@ app.post('/api/rag/chat', async (req, res) => {
       image_name: image_name || 'false',              // Flask treats "false" as no image
     };
 
-    console.log(
-      `[RAG] → /chat user:${user_id} chat:${chat_id} model:${model_name} has_image:${payload.has_image} image_name:${payload.image_name}`
-    );
+    console.log(`[RAG] → /chat chat:${chat_id} model:${model_name} has_image:${payload.has_image}`);
+    const ragStartedAt = Date.now();
 
     const response = await axios.post(`${RAG_BASE_URL}/chat`, payload, {
-      timeout: 30000,
+      timeout: RAG_TIMEOUT_MS,
       validateStatus: () => true,
+      headers: { 'X-Internal-Token': RAG_INTERNAL_TOKEN },
     });
 
     const short =
@@ -194,7 +254,7 @@ app.post('/api/rag/chat', async (req, res) => {
         ? response.data.slice(0, 300)
         : JSON.stringify(response.data).slice(0, 300);
 
-    console.log(`[RAG] ← /chat [${response.status}] ${short}`);
+    console.log(`[RAG] ← /chat [${response.status}] ${Date.now() - ragStartedAt}ms ${short}`);
 
     if (response.status >= 200 && response.status < 300) {
       return res.status(response.status).json(response.data);
@@ -214,17 +274,18 @@ app.post('/api/rag/chat', async (req, res) => {
  * POST /api/rag/close_chat
  * Body: { user_id, chat_id }
  */
-app.post('/api/rag/close_chat', async (req, res) => {
+app.post('/api/rag/close_chat', requireAuth, async (req, res) => {
   try {
     const { user_id, chat_id } = req.body || {};
-    if (!user_id || !chat_id) {
-      return res.status(400).json({ error: 'user_id and chat_id are required' });
+    if (!assertRequestedUser(req, user_id) || !chat_id) {
+      return res.status(400).json({ error: 'A valid chat_id is required' });
     }
 
     console.log(`[RAG] → /close_chat user:${user_id} chat:${chat_id}`);
 
-    const response = await axios.post(`${RAG_BASE_URL}/close_chat`, { user_id, chat_id }, {
+    const response = await axios.post(`${RAG_BASE_URL}/close_chat`, { user_id: req.user.id, chat_id }, {
       timeout: 25000,
+      headers: { 'X-Internal-Token': RAG_INTERNAL_TOKEN },
     });
 
     console.log(`[RAG] ← /close_chat [${response.status}]`);
@@ -240,10 +301,10 @@ app.post('/api/rag/close_chat', async (req, res) => {
  * POST /api/rag/merge_chats
  * Body: { user_id, new_chat_id, merge_chat_ids: string[] }
  */
-app.post('/api/rag/merge_chats', async (req, res) => {
+app.post('/api/rag/merge_chats', requireAuth, async (req, res) => {
   try {
     const { user_id, new_chat_id, merge_chat_ids } = req.body || {};
-    if (!user_id || !new_chat_id || !Array.isArray(merge_chat_ids) || merge_chat_ids.length < 2) {
+    if (!assertRequestedUser(req, user_id) || !new_chat_id || !Array.isArray(merge_chat_ids) || merge_chat_ids.length < 2) {
       return res.status(400).json({
         error: 'user_id, new_chat_id and merge_chat_ids (>=2) are required'
       });
@@ -253,8 +314,8 @@ app.post('/api/rag/merge_chats', async (req, res) => {
 
     const response = await axios.post(
       `${RAG_BASE_URL}/merge_chats`,
-      { user_id, new_chat_id, merge_chat_ids },
-      { timeout: 120000, validateStatus: () => true }
+      { user_id: req.user.id, new_chat_id, merge_chat_ids },
+      { timeout: 120000, validateStatus: () => true, headers: { 'X-Internal-Token': RAG_INTERNAL_TOKEN } }
     );
 
     const short =
@@ -283,16 +344,16 @@ app.post('/api/rag/merge_chats', async (req, res) => {
  * Body: { user_id, chat_id?, title, zip_file_url?, vector_count?, chat? }
  * Creates or updates a chat in the chats table
  */
-app.post('/api/chats/save', async (req, res) => {
+app.post('/api/chats/save', requireAuth, async (req, res) => {
   try {
     const { user_id, chat_id, title, zip_file_url, vector_count, chat } = req.body || {};
     
-    if (!user_id) {
-      return res.status(400).json({ error: 'user_id is required' });
+    if (!assertRequestedUser(req, user_id)) {
+      return res.status(403).json({ error: 'You can only save your own chats' });
     }
 
     const { upsertChat } = require('./src/utils/chat_helpers');
-    const result = await upsertChat(supabase, user_id, chat_id, {
+    const result = await upsertChat(supabase, req.user.id, chat_id, {
       title: title || 'New Conversation',
       zip_file_url: zip_file_url || '',
       vector_count: vector_count || 0,
@@ -303,7 +364,7 @@ app.post('/api/chats/save', async (req, res) => {
       return res.status(500).json({ error: result.error });
     }
 
-    return res.status(200).json({ 
+    return res.status(200).json({
       chat_id: result.chat_id,
       chat: result.data 
     });
@@ -318,15 +379,15 @@ app.post('/api/chats/save', async (req, res) => {
  * query: user_id
  * Returns list of chats for the user
  */
-app.get('/api/chats', async (req, res) => {
+app.get('/api/chats', requireAuth, async (req, res) => {
   try {
     const { user_id } = req.query;
-    if (!user_id) {
-      return res.status(400).json({ error: 'user_id query param is required' });
+    if (!assertRequestedUser(req, user_id)) {
+      return res.status(403).json({ error: 'You can only access your own chats' });
     }
 
     const { getChats } = require('./src/utils/chat_helpers');
-    const result = await getChats(supabase, user_id);
+    const result = await getChats(supabase, req.user.id);
 
     if (result.error) {
       return res.status(500).json({ error: result.error });
@@ -344,7 +405,7 @@ app.get('/api/chats', async (req, res) => {
  * Body: { chats: Array<chatRecord> }
  * Batch syncs multiple chats to Supabase (upsert for each)
  */
-app.post('/api/chats/sync', async (req, res) => {
+app.post('/api/chats/sync', requireAuth, async (req, res) => {
   try {
     const { chats } = req.body || {};
     
@@ -364,14 +425,14 @@ app.post('/api/chats/sync', async (req, res) => {
 
     // Process each chat
     for (const chatRecord of chats) {
-      const { chat_id, user_id, title, zip_file_url, vector_count, chat } = chatRecord;
+      const { chat_id, title, zip_file_url, vector_count, chat } = chatRecord;
       
-      if (!user_id || !chat_id) {
-        errors.push({ chat_id: chat_id || 'unknown', error: 'Missing user_id or chat_id' });
+      if (!chat_id) {
+        errors.push({ chat_id: 'unknown', error: 'Missing chat_id' });
         continue;
       }
 
-      const result = await upsertChat(supabase, user_id, chat_id, {
+      const result = await upsertChat(supabase, req.user.id, chat_id, {
         title: title || 'New Conversation',
         zip_file_url: zip_file_url || '',
         vector_count: vector_count || 0,
@@ -404,6 +465,47 @@ app.post('/api/chats/sync', async (req, res) => {
     console.error('[CHAT SYNC] /api/chats/sync error:', err?.message || err);
     return res.status(500).json({ error: 'Failed to sync chats' });
   }
+});
+
+/**
+ * DELETE /api/chats/:chatId
+ * Deletes the persisted chat and the RAG artifacts owned by the authenticated user.
+ */
+app.delete('/api/chats/:chatId', requireAuth, async (req, res) => {
+  const { chatId } = req.params;
+  const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  if (!uuidRegex.test(chatId)) return res.status(400).json({ error: 'Invalid chat id' });
+
+  try {
+    const { error } = await supabase.from('chats').delete().eq('chat_id', chatId).eq('user_id', req.user.id);
+    if (error) throw error;
+
+    const vectorPath = `${req.user.id}_${chatId}_chat_memory.zip`;
+    const imagePrefix = `images/${req.user.id}/${chatId}`;
+    const { data: images, error: listError } = await supabase.storage.from('chat_vectors').list(imagePrefix);
+    if (listError) console.warn('[CHAT DELETE] Could not list images:', listError.message);
+
+    const paths = [vectorPath, ...(images || []).map((image) => `${imagePrefix}/${image.name}`)];
+    const { error: storageError } = await supabase.storage.from('chat_vectors').remove(paths);
+    if (storageError) console.warn('[CHAT DELETE] Storage cleanup warning:', storageError.message);
+
+    console.log(`[CHAT DELETE] Deleted chat ${chatId} and ${paths.length} stored artifacts`);
+    return res.status(200).json({ deleted: true });
+  } catch (error) {
+    console.error('[CHAT DELETE] Failed:', error.message || error);
+    return res.status(500).json({ error: 'Unable to delete this chat. Please try again.' });
+  }
+});
+
+app.use((error, _req, res, _next) => {
+  if (error instanceof multer.MulterError) {
+    return res.status(400).json({ error: `Upload rejected: ${error.message}` });
+  }
+  if (error?.message === 'Origin is not allowed by CORS') {
+    return res.status(403).json({ error: 'Origin is not allowed' });
+  }
+  console.error('[API] Unhandled request error:', error?.message || error);
+  return res.status(500).json({ error: 'Unexpected server error' });
 });
 
 // -------------------- PRIVACY & TERMS --------------------

@@ -9,13 +9,17 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_classic.chains.combine_documents import create_stuff_documents_chain
 from langchain_classic.chains import create_retrieval_chain
 from supabase import create_client
-import os, shutil, zipfile, time, base64, threading, contextlib
+import os, shutil, zipfile, time, base64, threading, contextlib, hmac, mimetypes
 
 # =========================================================
 # SETUP
 # =========================================================
 load_dotenv()
 app = Flask(__name__)
+
+@app.route("/health", methods=["GET"])
+def health():
+    return jsonify({"status": "ok", "service": "brain-hop-rag"})
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
@@ -24,6 +28,10 @@ supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 if not OPENROUTER_API_KEY:
     raise ValueError("⚠️ Missing OPENROUTER_API_KEY in .env file!")
+
+RAG_INTERNAL_TOKEN = os.getenv("RAG_INTERNAL_TOKEN")
+if not RAG_INTERNAL_TOKEN:
+    raise ValueError("Missing RAG_INTERNAL_TOKEN in the runtime environment")
 
 os.environ["OPENAI_API_KEY"] = OPENROUTER_API_KEY
 os.environ["OPENAI_API_BASE"] = "https://openrouter.ai/api/v1"
@@ -35,8 +43,6 @@ embedding_model = HuggingFaceEmbeddings(
 )
 print("✅ Embedding Model Loaded!", flush=True)
 
-loaded_vectorstores = {}
-chat_history = {}
 loaded_vectorstores = {}
 chat_history = {}
 last_active = {}
@@ -96,6 +102,16 @@ def download_image_from_supabase(image_name):
 def cleanup_temp_images(delay=180):
     time.sleep(delay)
     shutil.rmtree("/tmp/temp_images", ignore_errors=True)
+
+def require_internal_token(handler):
+    """Only the authenticated Node gateway may call the RAG service."""
+    def wrapped(*args, **kwargs):
+        supplied = request.headers.get("X-Internal-Token", "")
+        if not hmac.compare_digest(supplied, RAG_INTERNAL_TOKEN):
+            return jsonify({"error": "Unauthorized"}), 401
+        return handler(*args, **kwargs)
+    wrapped.__name__ = handler.__name__
+    return wrapped
 
 # =========================================================
 # VECTORSTORE MANAGEMENT
@@ -216,7 +232,11 @@ def build_rag_chain(vectorstore, model_name):
         model=model_name,
         openai_api_base="https://openrouter.ai/api/v1",
         openai_api_key=OPENROUTER_API_KEY,
-        temperature=0.3
+        temperature=0.3,
+        # A model provider may queue or stall. Fail predictably instead of
+        # keeping the browser waiting for the Node proxy timeout.
+        timeout=45,
+        max_retries=1
     )
     prompt = ChatPromptTemplate.from_template(
         """You are a multilingual multimodal contextual AI assistant.
@@ -240,6 +260,7 @@ Assistant:"""
 # /CHAT ENDPOINT
 # =========================================================
 @app.route("/chat", methods=["POST"])
+@require_internal_token
 def chat():
     data = request.get_json()
     user_id = data.get("user_id")
@@ -251,6 +272,9 @@ def chat():
 
     if not all([user_id, chat_id, model_name, question]):
         return jsonify({"error": "Missing fields"}), 400
+
+    request_started_at = time.monotonic()
+    print(f"[RAG START] chat={chat_id} model={model_name} image={has_image}", flush=True)
 
     # vs loading moved inside locks where needed, except for initial read if safe
     # actually, load_vectorstore_from_supabase modifies global loaded_vectorstores, so we should allow it to be called safely.
@@ -272,26 +296,53 @@ def chat():
             image_caption = describe_image_with_openrouter(image_data["b64"])
             question += f"\n\n[Attached Image: {image_name}]\n[Image Description: {image_caption}]"
 
+    message_started_at = time.monotonic()
     add_message(user_id, chat_id, "user", question, has_image, image_name)
+    print(
+        f"[RAG TIMING] chat={chat_id} stage=store_user_message "
+        f"duration_ms={int((time.monotonic() - message_started_at) * 1000)}",
+        flush=True,
+    )
     if image_caption:
         add_message(user_id, chat_id, "assistant", f"Image Description: {image_caption}")
 
     # Re-acquire lock for reading to be safe against concurrent deletions
+    retrieval_started_at = time.monotonic()
     with get_chat_lock(user_id, chat_id):
         vs = load_vectorstore_from_supabase(user_id, chat_id)
         rag_chain = build_rag_chain(vs, model_name)
         chat_context = get_recent_chat_context(user_id, chat_id)
+        print(
+            f"[RAG TIMING] chat={chat_id} stage=prepare_context "
+            f"duration_ms={int((time.monotonic() - retrieval_started_at) * 1000)} "
+            f"history_chars={len(chat_context)} question_chars={len(question)}",
+            flush=True,
+        )
 
         try:
-            rag_input = {"input": f"{chat_context}\n\n{question}", "chat_history": chat_context}
+            # `input` is used by the retriever. Supplying the full history here
+            # made every retrieval and provider request grow unnecessarily, and
+            # duplicated it in the prompt through `chat_history`.
+            rag_input = {"input": question, "chat_history": chat_context}
+            model_started_at = time.monotonic()
             result = rag_chain.invoke(rag_input)
             response = result.get("answer", "").strip()
+            print(
+                f"[RAG TIMING] chat={chat_id} stage=openrouter_and_retrieval "
+                f"duration_ms={int((time.monotonic() - model_started_at) * 1000)}",
+                flush=True,
+            )
         except Exception as e:
-            print("❌ RAG Error:", e)
-            response = "Sorry, something went wrong while processing your request."
+            print("[RAG ERROR]", e, flush=True)
+            print(f"[RAG ERROR] model={model_name} chat={chat_id} error={e}", flush=True)
+            return jsonify({
+                "error": "The selected model did not respond in time. Please try again or choose another model."
+            }), 503
 
     add_message(user_id, chat_id, "assistant", response)
     threading.Thread(target=cleanup_temp_images, daemon=True).start()
+
+    print(f"[RAG COMPLETE] chat={chat_id} duration_ms={int((time.monotonic() - request_started_at) * 1000)}", flush=True)
 
     return jsonify({
         "response": response,
@@ -303,6 +354,7 @@ def chat():
 # /MERGE_CHATS ENDPOINT
 # =========================================================
 @app.route("/merge_chats", methods=["POST"])
+@require_internal_token
 def merge_chats():
     data = request.get_json()
     user_id = data.get("user_id")
@@ -361,6 +413,7 @@ def merge_chats():
 # /CLOSE_CHAT ENDPOINT
 # =========================================================
 @app.route("/close_chat", methods=["POST"])
+@require_internal_token
 def close_chat():
     data = request.get_json()
     user_id = data.get("user_id")
@@ -373,4 +426,5 @@ def close_chat():
 # RUN
 # =========================================================
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5001, debug=True)
+    # Cloud hosts inject PORT. RAG_PORT remains useful for local development.
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", os.getenv("RAG_PORT", "5001"))), debug=False)
