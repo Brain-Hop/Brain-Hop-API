@@ -13,7 +13,7 @@ and `/api/rag/close_chat`.
 ## Before you deploy
 
 1. Rotate any Supabase service-role or OpenRouter keys that were ever exposed.
-2. Create an OpenAI API key for embeddings. It must be a backend-only secret.
+2. Create a Google AI Studio key for Gemini embeddings. It must be a backend-only secret.
 3. In Supabase SQL Editor, run `supabase/migrations/20260815_pgvector_chat_memory.sql`.
 4. Confirm the migration created `chat_memory_chunks`, `match_chat_memory`, and
    `copy_chat_memory`.
@@ -23,7 +23,9 @@ and `/api/rag/close_chat`.
 SUPABASE_URL=<project URL>
 SUPABASE_KEY=<service role key>
 OPENROUTER_API_KEY=<existing completion key>
-OPENAI_API_KEY=<embedding key>
+GEMINI_API_KEY=<Google AI Studio key>
+GEMINI_EMBEDDING_MODEL=gemini-embedding-001
+FREE_MODEL=openrouter/free
 FRONTEND_URL=https://<your-vercel-site>.vercel.app
 CORS_ALLOWED_ORIGINS=https://<custom-domain-if-any>
 ```

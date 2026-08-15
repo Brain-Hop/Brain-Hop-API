@@ -5,9 +5,9 @@ memory, image context, and chat merging.
 
 This branch replaces the deployment-time Flask/Chroma/HuggingFace runtime with:
 
-- OpenAI `text-embedding-3-small` for multilingual text embeddings.
+- Google Gemini `gemini-embedding-001` free-tier embeddings for multilingual semantic memory.
 - Supabase Postgres + pgvector for persistent semantic memory.
-- OpenRouter for answer generation and image descriptions.
+- OpenRouter's `openrouter/free` router for answer generation and image descriptions.
 - Render Free for the Node API and Vercel for the React frontend.
 
 The legacy `chatbot/` directory is rollback material only; it is not part of
@@ -20,7 +20,7 @@ flowchart LR
   U["User browser"] --> V["Vercel: React frontend"]
   V -->|"Bearer token + HTTPS"| A["Render: Node/Express API"]
   A --> AUTH["Supabase Auth: verify user"]
-  A -->|"embed message/query"| E["OpenAI Embeddings"]
+  A -->|"embed message/query"| E["Gemini free embeddings"]
   A -->|"store + semantic search"| DB["Supabase Postgres + pgvector"]
   A -->|"upload/download images"| S["Supabase Storage"]
   A -->|"answer + image description"| L["OpenRouter"]
@@ -35,14 +35,14 @@ flowchart LR
 | Chat metadata and UI history | `chats` table | Restores sidebar and message history. |
 | Searchable message chunks | `chat_memory_chunks` | Semantic retrieval with pgvector. |
 | Uploaded images | `chat_vectors` Storage bucket | Image context, owned by the authenticated user. |
-| Embedding and model API keys | Render environment | Never sent to the browser. |
+| Gemini and OpenRouter API keys | Render environment | Never sent to the browser. |
 
 ## Prerequisites
 
 - Node.js 20 or later.
 - A Supabase project with Auth and the existing `chats` table/bucket.
 - An OpenRouter API key for chat generation.
-- An OpenAI API key for embeddings.
+- A free-tier Google AI Studio API key for Gemini embeddings.
 - A Vercel deployment of the `Brain-Hop` frontend.
 
 ## Local setup
@@ -56,8 +56,9 @@ flowchart LR
 SUPABASE_URL=https://your-project.supabase.co
 SUPABASE_KEY=your_service_role_key
 OPENROUTER_API_KEY=your_openrouter_key
-OPENAI_API_KEY=your_openai_key
-EMBEDDING_MODEL=text-embedding-3-small
+GEMINI_API_KEY=your_google_ai_studio_key
+GEMINI_EMBEDDING_MODEL=gemini-embedding-001
+FREE_MODEL=openrouter/free
 PORT=3001
 FRONTEND_URL=http://localhost:5173
 CORS_ALLOWED_ORIGINS=http://localhost:8080
@@ -125,7 +126,9 @@ FRONTEND_URL=https://your-project.vercel.app
 CORS_ALLOWED_ORIGINS=https://app.yourdomain.com
 ```
 
-Set the health-check path to `/api/health`.
+Set the health-check path to `/api/health`. The API needs `GEMINI_API_KEY`, not
+`OPENAI_API_KEY`. Set `FREE_MODEL=openrouter/free` so frontend model selections
+cannot use paid OpenRouter models.
 
 ### Vercel frontend
 
@@ -137,8 +140,8 @@ VITE_SUPABASE_ANON_KEY=your_supabase_anon_key
 VITE_API_BASE_URL=https://your-render-api.onrender.com
 ```
 
-Only the Supabase anon key belongs in Vercel. Never expose service-role,
-OpenAI, or OpenRouter keys in frontend variables.
+Only the Supabase anon key belongs in Vercel. Never expose service-role, Gemini,
+or OpenRouter keys in frontend variables.
 
 ## Verification
 
@@ -163,4 +166,5 @@ For rollout, rollback, and backfill detail, use
 
 Render Free can sleep after inactivity, so the first request after idle may be
 slow. The API no longer loads PyTorch, Chroma, or a local embedding model, which
-removes the prior memory failure.
+removes the prior memory failure. Gemini free-tier embeddings and OpenRouter free
+models have quotas and availability limits; this is suitable for personal use and demos.
