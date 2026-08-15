@@ -37,14 +37,12 @@ SUPABASE_KEY=<your Supabase service-role key>
 OPENROUTER_API_KEY=<your OpenRouter key>
 GEMINI_API_KEY=<your Google AI Studio key>
 GEMINI_EMBEDDING_MODEL=gemini-embedding-001
-IMAGE_DESCRIPTION_MODEL=nvidia/nemotron-nano-12b-v2-vl:free
 FRONTEND_URL=https://<your-vercel-project>.vercel.app
 CORS_ALLOWED_ORIGINS=https://<your-vercel-project>.vercel.app
 ```
 
-The API forwards the exact model chosen in the frontend to OpenRouter. The
-image-description model is separate because only vision-capable models can
-caption uploaded images.
+The API forwards the exact model chosen in the frontend to OpenRouter for both
+chat replies and image descriptions.
 
 ## 3. Configure the Vercel frontend
 

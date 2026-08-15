@@ -5,7 +5,6 @@ const GEMINI_EMBEDDING_MODEL = process.env.GEMINI_EMBEDDING_MODEL || 'gemini-emb
 const EMBEDDING_DIMENSIONS = 1536;
 const GEMINI_EMBEDDINGS_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_EMBEDDING_MODEL}:embedContent`;
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
-const IMAGE_DESCRIPTION_MODEL = process.env.IMAGE_DESCRIPTION_MODEL || 'nvidia/nemotron-nano-12b-v2-vl:free';
 
 function required(name) {
   const value = process.env[name];
@@ -109,13 +108,13 @@ async function complete({ modelName, question, memories, recentMessages }) {
   return content.trim();
 }
 
-async function describeImage(supabase, imageName) {
+async function describeImage(supabase, imageName, modelName) {
   const { data, error } = await supabase.storage.from('chat_vectors').download(imageName);
   if (error || !data) throw new Error('Unable to download uploaded image');
   const image = Buffer.from(await data.arrayBuffer()).toString('base64');
   const response = await axios.post(OPENROUTER_URL, {
-    // Image captions need vision support, so this is an explicit free vision model.
-    model: IMAGE_DESCRIPTION_MODEL,
+    // Preserve the frontend's model choice for image handling as well.
+    model: modelName,
     messages: [{ role: 'user', content: [
       { type: 'text', text: 'Describe this image accurately and concisely for future chat retrieval.' },
       { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${image}` } },
@@ -128,7 +127,7 @@ async function describeImage(supabase, imageName) {
 }
 
 async function answerChat(supabase, { userId, chatId, modelName, question, imageName }) {
-  const imageDescription = imageName ? await describeImage(supabase, imageName) : '';
+  const imageDescription = imageName ? await describeImage(supabase, imageName, modelName) : '';
   const enrichedQuestion = imageDescription ? `${question}\n\n[Attached image description: ${imageDescription}]` : question;
   const [memories, recentMessages] = await Promise.all([
     retrieveMemory(supabase, { userId, chatId, question: enrichedQuestion }),
