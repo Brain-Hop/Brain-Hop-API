@@ -1,46 +1,27 @@
 # Brain Hop deployment: Vercel + Render free tier
 
-Use Vercel for the React frontend and Render for both backend services. This is
-appropriate for a portfolio/demo: free Render services sleep after 15 minutes,
-so the first request can take roughly a minute. Do not use this setup where
-always-on chat is required.
+Deploy one Node API service on Render. The retired Flask, Chroma, and local
+HuggingFace runtime are not deployed.
 
-```
-Browser (Vercel) -> Express API (Render) -> Flask RAG (Render)
-                              |                 |
-                           Supabase          OpenRouter
+```text
+Browser (Vercel) -> Node API (Render) -> Supabase pgvector + Gemini embeddings
+                                      -> OpenRouter selected model
 ```
 
-The browser talks only to the Express API. The RAG service is public on the
-free tier because free Render services cannot receive private-network traffic,
-but it rejects all chat operations unless the request has the shared
-`RAG_INTERNAL_TOKEN`. Never put that token in Vercel or browser code.
+Render Free is appropriate for a personal project or demo. It sleeps after
+inactivity, so the first request can take roughly a minute.
 
-## 1. Deploy the RAG service first
+## 1. Apply the Supabase migration
 
-Create a Render **Web Service** from this repository:
+In Supabase SQL Editor, run:
 
-- Root directory: `chatbot`
-- Runtime: Docker
-- Dockerfile path: `./Dockerfile`
-- Instance type: Free
-- Health check path: `/health`
-
-Set these Render environment variables:
-
-```
-SUPABASE_URL=<your Supabase project URL>
-SUPABASE_KEY=<your Supabase service-role key>
-OPENROUTER_API_KEY=<your OpenRouter key>
-RAG_INTERNAL_TOKEN=<a long random secret>
-PYTHONUNBUFFERED=1
+```text
+supabase/migrations/20260815_pgvector_chat_memory.sql
 ```
 
-Copy its public URL, for example `https://brain-hop-chatbot.onrender.com`.
+## 2. Deploy the Node API on Render
 
-## 2. Deploy the Express API
-
-Create another Render **Web Service** from the repository root:
+Create one Render **Web Service** from this repository:
 
 - Root directory: `.`
 - Runtime: Docker
@@ -48,39 +29,33 @@ Create another Render **Web Service** from the repository root:
 - Instance type: Free
 - Health check path: `/api/health`
 
-Set:
+Set these backend-only variables:
 
-```
-SUPABASE_URL=<same project URL>
-SUPABASE_KEY=<same service-role key>
-RAG_BASE_URL=https://<your-rag-service>.onrender.com
-RAG_INTERNAL_TOKEN=<exactly the same secret used by RAG>
+```env
+SUPABASE_URL=<your Supabase project URL>
+SUPABASE_KEY=<your Supabase service-role key>
+OPENROUTER_API_KEY=<your OpenRouter key>
+GEMINI_API_KEY=<your Google AI Studio key>
+GEMINI_EMBEDDING_MODEL=gemini-embedding-001
+IMAGE_DESCRIPTION_MODEL=nvidia/nemotron-nano-12b-v2-vl:free
 FRONTEND_URL=https://<your-vercel-project>.vercel.app
+CORS_ALLOWED_ORIGINS=https://<your-vercel-project>.vercel.app
 ```
 
-For a custom domain or another approved frontend, use
-`CORS_ALLOWED_ORIGINS` with comma-separated, exact origins, for example:
+The API forwards the exact model chosen in the frontend to OpenRouter. The
+image-description model is separate because only vision-capable models can
+caption uploaded images.
 
-```
-CORS_ALLOWED_ORIGINS=https://app.example.com,https://staging.example.com
-```
+## 3. Configure the Vercel frontend
 
-Wildcards are intentionally unsupported. This prevents arbitrary websites from
-calling the API from a browser. CORS is not authentication: protected API
-routes still verify the user's Supabase Bearer token.
+Set these variables in the `Brain-Hop` Vercel project and redeploy:
 
-## 3. Deploy the frontend on Vercel
-
-Import the `Brain-Hop` folder/repository in Vercel. Its `vercel.json` already
-supports direct React Router URLs. Add these Vercel environment variables, then
-redeploy:
-
-```
+```env
 VITE_SUPABASE_URL=<your Supabase project URL>
 VITE_SUPABASE_ANON_KEY=<your Supabase anon key>
 VITE_API_BASE_URL=https://<your-api-service>.onrender.com
 ```
 
-Only the Supabase anon key is allowed in `VITE_*` variables. Add the Vercel
-production URL to Supabase Auth's allowed redirect URLs if authentication uses
-email links or OAuth.
+Never expose the Supabase service-role key, Gemini key, or OpenRouter key in a
+`VITE_*` variable. Add the Vercel production URL to Supabase Auth redirect URLs
+if you use email-link authentication or OAuth.
