@@ -1,43 +1,20 @@
 services:
-  # 1. Python Chatbot (The Logic)
-  - type: web
-    name: brain-hop-chatbot
-    env: docker
-    # Points to Brain-Hop-API/chatbot inside the repo
-    # If this file is in the root of Brain-Hop-API repo, then:
-    dockerContext: ./chatbot
-    plan: free
-    envVars:
-      - key: PYTHONUNBUFFERED
-        value: 1
-      # User must fill these in Render Dashboard
-      - key: SUPABASE_URL
-        sync: false
-      - key: SUPABASE_KEY
-        sync: false
-      - key: OPENROUTER_API_KEY
-        sync: false
-      - key: RAG_INTERNAL_TOKEN
-        sync: false
-
-  # 2. Node.js API (The Gateway)
+  # Node-only API: suitable for Render Free because it has no local ML runtime.
   - type: web
     name: brain-hop-api
     env: docker
     # Points to root of Brain-Hop-API repo
     dockerContext: .
     plan: free
+    healthCheckPath: /api/health
     envVars:
-      # Free Render services cannot receive private-network traffic. After the
-      # chatbot deploys, set this to its public Render URL in the dashboard.
-      # The chatbot still rejects every request without RAG_INTERNAL_TOKEN.
-      - key: RAG_BASE_URL
-        sync: false
       - key: SUPABASE_URL
         sync: false
       - key: SUPABASE_KEY
         sync: false
-      - key: RAG_INTERNAL_TOKEN
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: OPENAI_API_KEY
         sync: false
       - key: FRONTEND_URL
         sync: false

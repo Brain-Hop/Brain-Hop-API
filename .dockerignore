@@ -1,9 +1,6 @@
-node_modules/
-npm-debug.log
-.git
-.gitignore
+node_modules
+venv
+chatbot
 .env
-.env.example
-docker-compose.yml
-render.yaml
-chatbot/
+.git
+*.log
