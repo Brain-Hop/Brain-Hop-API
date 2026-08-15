@@ -4,11 +4,10 @@ WORKDIR /app
 
 # Copy package.json and lockfile (if exists)
 COPY package.json package-lock.json* ./
-# Use npm install which generates lockfile if missing (more robust for initial deploy)
-RUN npm install --production
+# Install only locked production dependencies.
+RUN npm ci --omit=dev
 
-# Copy all files (including the nested chatbot folder, technically, but we won't run it here)
-# To be cleaner, we might want to exclude chatbot via .dockerignore, but it doesn't hurt much.
+# .dockerignore excludes the retired local-ML runtime and local credentials.
 COPY . .
 
 EXPOSE 3001

@@ -1,6 +1,6 @@
 /**
- * Shared Supabase client for privileged server-side work.
- * Keep its credentials in the runtime environment only.
+ * Shared server-side Supabase client. Credentials must come from runtime
+ * environment variables and must never be embedded in source code.
  */
 const { createClient } = require('@supabase/supabase-js');
 
