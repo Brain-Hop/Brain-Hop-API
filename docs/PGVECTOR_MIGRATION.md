@@ -25,7 +25,7 @@ SUPABASE_KEY=<service role key>
 OPENROUTER_API_KEY=<existing completion key>
 GEMINI_API_KEY=<Google AI Studio key>
 GEMINI_EMBEDDING_MODEL=gemini-embedding-001
-FREE_MODEL=openrouter/free
+IMAGE_DESCRIPTION_MODEL=nvidia/nemotron-nano-12b-v2-vl:free
 FRONTEND_URL=https://<your-vercel-site>.vercel.app
 CORS_ALLOWED_ORIGINS=https://<custom-domain-if-any>
 ```
