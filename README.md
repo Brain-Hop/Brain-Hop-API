@@ -1,162 +1,166 @@
-# ⚡ Brain Hop - Backend API
+# Brain Hop API
 
-![Banner](https://via.placeholder.com/1200x350/0f172a/FFFFFF?text=Brain+Hop+Backend+API)
+The Brain Hop backend provides authenticated AI conversations, searchable chat
+memory, image context, and chat merging.
 
-> **The high-performance API Gateway and RAG Engine powering Brain Hop.**
-> *Orchestrates authentication, vector storage, and huge context retrieval.*
+This branch replaces the deployment-time Flask/Chroma/HuggingFace runtime with:
 
-<div align="center">
+- OpenAI `text-embedding-3-small` for multilingual text embeddings.
+- Supabase Postgres + pgvector for persistent semantic memory.
+- OpenRouter for answer generation and image descriptions.
+- Render Free for the Node API and Vercel for the React frontend.
 
-![Node.js](https://img.shields.io/badge/Node.js-18-339933?style=for-the-badge&logo=nodedotjs&logoColor=white)
-![Express](https://img.shields.io/badge/Express-4.x-000000?style=for-the-badge&logo=express&logoColor=white)
-![Python](https://img.shields.io/badge/Python-3.11-3776AB?style=for-the-badge&logo=python&logoColor=white)
-![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?style=for-the-badge&logo=docker&logoColor=white)
-![Supabase](https://img.shields.io/badge/Supabase-Storage-3ECF8E?style=for-the-badge&logo=supabase&logoColor=white)
+The legacy `chatbot/` directory is rollback material only; it is not part of
+the Node-only deployment.
 
-</div>
+## Data-flow diagram
 
----
-
-## 📖 Table of Contents
-- [🏗️ Architecture](#-architecture)
-- [🐳 Docker Setup (Recommended)](#-docker-setup-recommended)
-- [🔧 Manual Setup](#-manual-setup)
-- [🔌 API Reference](#-api-reference)
-- [🧪 Testing Strategy](#-testing-strategy)
-
----
-
-## 🏗️ Architecture
-
-The backend consists of **two microservices**:
-
-1.  **API Gateway (`Node.js/Express`)** - Port `3001`
-    - Handles HTTP requests from the frontend.
-    - Manages Authentication (Supabase Auth).
-    - Proxies complex AI tasks to the Python service.
-    
-2.  **RAG Engine (`Python/Flask`)** - Port `5001`
-    - Uses **LangChain** and **ChromaDB**.
-    - Handles Document Parsing, Vector Embeddings (HuggingFace), and Retrieval.
-    - Persists vector stores to Supabase Storage as zipped artifacts.
-
----
-
-## 🐳 Docker Setup (Recommended)
-
-The easiest way to run the entire backend stack.
-
-### 1️⃣ Prerequisites
-- Docker Desktop installed and running.
-- A `.env` file in the root directory (see `.env.example`).
-
-### 2️⃣ Start Services
-Run the following command in the `Brain-Hop-API` root:
-
-```bash
-docker-compose up --build
+```mermaid
+flowchart LR
+  U["User browser"] --> V["Vercel: React frontend"]
+  V -->|"Bearer token + HTTPS"| A["Render: Node/Express API"]
+  A --> AUTH["Supabase Auth: verify user"]
+  A -->|"embed message/query"| E["OpenAI Embeddings"]
+  A -->|"store + semantic search"| DB["Supabase Postgres + pgvector"]
+  A -->|"upload/download images"| S["Supabase Storage"]
+  A -->|"answer + image description"| L["OpenRouter"]
+  A --> V
 ```
 
-### 🔍 What happens next?
-- **Builds** the Python image (`chatbot/Dockerfile`).
-- **Builds** the Node image (`Dockerfile`).
-- **Starts** both containers.
-- **Hot Reloading**: 
-    - The Node API uses `nodemon` (via `npx`). Changes to `server.js` will restart it properly.
-    - The Python Chatbot mounts the volume. Changes to `main.py` will trigger a reload (Flask debug mode).
+## What is stored where
 
-### 🛑 Stop Services
-```bash
-docker-compose down
+| Data | Location | Purpose |
+| --- | --- | --- |
+| Login/session | Supabase Auth | Identifies the current user. |
+| Chat metadata and UI history | `chats` table | Restores sidebar and message history. |
+| Searchable message chunks | `chat_memory_chunks` | Semantic retrieval with pgvector. |
+| Uploaded images | `chat_vectors` Storage bucket | Image context, owned by the authenticated user. |
+| Embedding and model API keys | Render environment | Never sent to the browser. |
+
+## Prerequisites
+
+- Node.js 20 or later.
+- A Supabase project with Auth and the existing `chats` table/bucket.
+- An OpenRouter API key for chat generation.
+- An OpenAI API key for embeddings.
+- A Vercel deployment of the `Brain-Hop` frontend.
+
+## Local setup
+
+1. In `Brain-Hop-API`, copy `.env.example` to `.env`.
+
+2. Fill in the values. `SUPABASE_KEY` is a server-only service-role key; do
+   not use it in Vercel or in any `VITE_*` variable.
+
+```text
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_KEY=your_service_role_key
+OPENROUTER_API_KEY=your_openrouter_key
+OPENAI_API_KEY=your_openai_key
+EMBEDDING_MODEL=text-embedding-3-small
+PORT=3001
+FRONTEND_URL=http://localhost:5173
+CORS_ALLOWED_ORIGINS=http://localhost:8080
 ```
 
----
+3. Install and start the API.
 
-## 🔧 Manual Setup
-
-If you prefer running without Docker.
-
-### 1️⃣ Node.js Gateway
-```bash
-# Install dependencies
-npm install
-
-# Start Server (Use 'dev' for hot reload)
-npm run start
-# Server runs at http://localhost:3001
+```powershell
+npm ci
+npm start
 ```
 
-### 2️⃣ Python Chatbot
-**Note**: Requires Python 3.11+.
+4. Verify the health check:
 
-```bash
-cd chatbot
-
-# Create venv (Recommended)
-python -m venv venv
-source venv/bin/activate  # or venv\Scripts\activate on Windows
-
-# Install Dependencies
-pip install -r requirements.txt
-
-# Start Flask App
-python main.py
-# Server runs at http://localhost:5001
+```text
+http://localhost:3001/api/health
 ```
 
----
+## Database migration
 
-## 🔌 API Reference
+Before using chat memory, open Supabase Dashboard → SQL Editor and run:
 
-### 🟢 Status
-- **`GET /health`**
-  - Returns `200 OK` if the Node server is running.
-
-### 🤖 Chat Operations (Node Proxy -> Python)
-
-- **`POST /api/chat`**
-  - **Body**: `{ "message": "Hello", "history": [...] }`
-  - **Description**: Sends user message to RAG engine. Logic:
-    1. Node receives request.
-    2. Downloads vector store from Supabase (if exists).
-    3. Forwards to Python (`http://localhost:5001/chat`).
-    4. Python generates response using LangChain.
-
-- **`POST /api/chat/close`**
-  - **Body**: `{ "chatId": "123", "userId": "user_abc" }`
-  - **Description**: Triggers persistence. The current in-memory vector store is zipped and uploaded to Supabase Storage.
-
-- **`POST /api/chat/merge`**
-  - **Body**: `{ "chatIds": ["id1", "id2"] }`
-  - **Description**: Merges two vector stores into a new session context.
-
----
-
-## 🧪 Testing Strategy
-
-### 🟢 Node.js Tests (Jest)
-Located in `tests/`. Covers authentication and routine proxy logic.
-
-```bash
-npm run test
+```text
+supabase/migrations/20260815_pgvector_chat_memory.sql
 ```
 
-### 🐍 Python Tests (Pytest in Docker)
-Located in `chatbot/tests/`. Covers RAG logic, API endpoints, and File I/O.
-**We run these in Docker** to skip installing 2GB+ of ML libraries (PyTorch/Transformers) on your local machine.
+The migration enables pgvector, creates `chat_memory_chunks`, enables RLS, and
+adds memory-match/copy functions. It does not delete old Chroma ZIP artifacts.
 
-**How to run:**
-1.  Navigate to `chatbot/`.
-2.  Run the helper script:
+## Existing chat backfill
 
-```cmd
-test_docker.bat
+Old Chroma vectors use a different embedding model and cannot be reused. The
+backfill rebuilds vectors from persisted `chats.chat` JSON history.
+
+```powershell
+# Preview only
+npm run backfill:memory
+
+# Apply after reviewing preview output
+npm run backfill:memory -- --apply
 ```
 
-**What this script does:**
-1.  Builds a lightweight Docker image (`chatbot-test-light`).
-2.  Installs only test dependencies (flask, pytest, mocks).
-3.  Runs `pytest`.
-4.  Deletes the container and image.
+Keep old ZIP artifacts until sampled old chats pass UAT.
 
-> ✅ **All tests are mocked!** No real API calls are made to OpenAI or Supabase ensuring fast and free execution.
+## Docker
+
+Create `.env`, then run:
+
+```powershell
+docker compose up --build
+```
+
+The Node API runs on port `3001`. Docker Compose intentionally does not start
+the legacy Python RAG service.
+
+## Production deployment
+
+### Render API
+
+Deploy this repository using `render.yaml` or a Docker Web Service. Set the
+variables above, with your Vercel production URL:
+
+```text
+FRONTEND_URL=https://your-project.vercel.app
+CORS_ALLOWED_ORIGINS=https://app.yourdomain.com
+```
+
+Set the health-check path to `/api/health`.
+
+### Vercel frontend
+
+Set these Vercel variables in the `Brain-Hop` frontend project:
+
+```text
+VITE_SUPABASE_URL=https://your-project.supabase.co
+VITE_SUPABASE_ANON_KEY=your_supabase_anon_key
+VITE_API_BASE_URL=https://your-render-api.onrender.com
+```
+
+Only the Supabase anon key belongs in Vercel. Never expose service-role,
+OpenAI, or OpenRouter keys in frontend variables.
+
+## Verification
+
+```powershell
+npm test
+node --check server.js
+```
+
+For end-to-end validation, use [docs/FREE_TIER_UAT.md](docs/FREE_TIER_UAT.md).
+For rollout, rollback, and backfill detail, use
+[docs/PGVECTOR_MIGRATION.md](docs/PGVECTOR_MIGRATION.md).
+
+## Security controls
+
+- Protected routes verify the Supabase Bearer token and derive ownership from it.
+- CORS accepts only configured exact frontend origins.
+- Uploaded images have type and 5 MB limits.
+- Chat rows, vectors, and image paths are scoped to the authenticated user.
+- API credentials are runtime environment variables only.
+
+## Free-tier note
+
+Render Free can sleep after inactivity, so the first request after idle may be
+slow. The API no longer loads PyTorch, Chroma, or a local embedding model, which
+removes the prior memory failure.
