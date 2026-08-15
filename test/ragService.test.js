@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { splitText } = require('../src/services/ragService');
+const { freeModel, splitText } = require('../src/services/ragService');
 
 test('splitText returns clean input as one chunk', () => {
   assert.deepEqual(splitText('  concise message  '), ['concise message']);
@@ -15,4 +15,9 @@ test('splitText creates overlapping chunks for long text', () => {
 
 test('splitText does not emit empty chunks', () => {
   assert.deepEqual(splitText('   '), []);
+});
+
+test('freeModel rejects a paid frontend model selection', () => {
+  assert.equal(freeModel('openai/gpt-4o-mini'), process.env.FREE_MODEL || 'openrouter/free');
+  assert.equal(freeModel('meta-llama/llama-3.2-3b-instruct:free'), 'meta-llama/llama-3.2-3b-instruct:free');
 });

@@ -1,10 +1,10 @@
-# pgvector RAG migration
+# Free text-search RAG migration
 
 ## What changes
 
 The deployed runtime becomes one Node API service. It stores message chunks in
-Supabase pgvector, retrieves the relevant chunks for each question, and calls
-OpenRouter for the answer. The old Flask, Chroma, and local HuggingFace model
+Supabase Postgres, retrieves matching chunks with full-text search, and calls
+OpenRouter's free router for the answer. The old Flask, Chroma, and local HuggingFace model
 are not started in production.
 
 The frontend routes stay the same: `/api/rag/chat`, `/api/rag/merge_chats`,
@@ -13,28 +13,30 @@ and `/api/rag/close_chat`.
 ## Before you deploy
 
 1. Rotate any Supabase service-role or OpenRouter keys that were ever exposed.
-2. Create an OpenAI API key for embeddings. It must be a backend-only secret.
-3. In Supabase SQL Editor, run `supabase/migrations/20260815_pgvector_chat_memory.sql`.
-4. Confirm the migration created `chat_memory_chunks`, `match_chat_memory`, and
-   `copy_chat_memory`.
+2. In Supabase SQL Editor, run `supabase/migrations/20260815_pgvector_chat_memory.sql`.
+3. Then run `supabase/migrations/20260816_free_text_chat_memory.sql`.
+4. Confirm `chat_memory_chunks` has a `search_vector` column and `copy_chat_memory`.
 5. Set the Render variables below. Do not add any of them as `VITE_*` values.
 
 ```text
 SUPABASE_URL=<project URL>
 SUPABASE_KEY=<service role key>
 OPENROUTER_API_KEY=<existing completion key>
-OPENAI_API_KEY=<embedding key>
+FREE_MODEL=openrouter/free
 FRONTEND_URL=https://<your-vercel-site>.vercel.app
 CORS_ALLOWED_ORIGINS=https://<custom-domain-if-any>
 ```
 
+`openrouter/free` is zero-cost but rate-limited. The API ignores paid model
+names supplied by the frontend and falls back to `FREE_MODEL`.
+
 ## Existing memory migration
 
-Existing Chroma ZIP vectors cannot be reused because they were generated with a
-different embedding model. Leave ZIP artifacts in Supabase Storage untouched.
+Existing Chroma ZIP vectors are not used. Leave ZIP artifacts in Supabase
+Storage untouched.
 
-The supported backfill reads message history from `chats.chat` and creates new
-embeddings. First run a dry run:
+The supported backfill reads message history from `chats.chat` and creates
+searchable text rows. First run a dry run:
 
 ```text
 npm run backfill:memory
