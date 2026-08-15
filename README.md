@@ -166,4 +166,5 @@ For rollout, rollback, and backfill detail, use
 Render Free can sleep after inactivity, so the first request after idle may be
 slow. The API no longer loads PyTorch, Chroma, or a local embedding model, which
 removes the prior memory failure. Gemini free-tier embeddings and OpenRouter free
-models have quotas and availability limits; this is suitable for personal use and demos.
+models have quotas and availability limits; this is suitable for personal use and demos. 
+One expected limitation: if a user uploads an image while choosing a text-only model, that selected provider model may reject image input. The backend will not substitute another model.
