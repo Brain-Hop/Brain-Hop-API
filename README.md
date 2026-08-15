@@ -7,7 +7,7 @@ This branch replaces the deployment-time Flask/Chroma/HuggingFace runtime with:
 
 - Google Gemini `gemini-embedding-001` free-tier embeddings for multilingual semantic memory.
 - Supabase Postgres + pgvector for persistent semantic memory.
-- OpenRouter's `openrouter/free` router for answer generation and image descriptions.
+- OpenRouter for answers using the exact model selected in the frontend.
 - Render Free for the Node API and Vercel for the React frontend.
 
 The legacy `chatbot/` directory is rollback material only; it is not part of
@@ -58,7 +58,6 @@ SUPABASE_KEY=your_service_role_key
 OPENROUTER_API_KEY=your_openrouter_key
 GEMINI_API_KEY=your_google_ai_studio_key
 GEMINI_EMBEDDING_MODEL=gemini-embedding-001
-FREE_MODEL=openrouter/free
 PORT=3001
 FRONTEND_URL=http://localhost:5173
 CORS_ALLOWED_ORIGINS=http://localhost:8080
@@ -127,8 +126,8 @@ CORS_ALLOWED_ORIGINS=https://app.yourdomain.com
 ```
 
 Set the health-check path to `/api/health`. The API needs `GEMINI_API_KEY`, not
-`OPENAI_API_KEY`. Set `FREE_MODEL=openrouter/free` so frontend model selections
-cannot use paid OpenRouter models.
+`OPENAI_API_KEY`. The chat endpoint forwards the model selected in the frontend
+unchanged for both replies and image descriptions.
 
 ### Vercel frontend
 

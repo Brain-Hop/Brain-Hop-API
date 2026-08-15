@@ -10,7 +10,6 @@ services:
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
       GEMINI_API_KEY: ${GEMINI_API_KEY}
       GEMINI_EMBEDDING_MODEL: ${GEMINI_EMBEDDING_MODEL:-gemini-embedding-001}
-      FREE_MODEL: ${FREE_MODEL:-openrouter/free}
       FRONTEND_URL: ${FRONTEND_URL:-http://localhost:5173}
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:8080}
     restart: unless-stopped

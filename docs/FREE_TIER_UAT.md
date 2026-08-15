@@ -7,7 +7,7 @@ legacy Flask service.
 
 - Use two different Supabase users: User A and User B.
 - Confirm Render has `GEMINI_API_KEY`, `OPENROUTER_API_KEY`, Supabase server
-  credentials, `FREE_MODEL=openrouter/free`, and the exact Vercel origin in `FRONTEND_URL`.
+  credentials, and the exact Vercel origin in `FRONTEND_URL`.
 - Confirm `GET /api/health` returns `200`.
 
 ## Test flow

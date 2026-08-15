@@ -18,8 +18,6 @@ services:
         sync: false
       - key: GEMINI_EMBEDDING_MODEL
         value: gemini-embedding-001
-      - key: FREE_MODEL
-        value: openrouter/free
       - key: FRONTEND_URL
         sync: false
       - key: CORS_ALLOWED_ORIGINS
