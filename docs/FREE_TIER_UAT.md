@@ -6,10 +6,8 @@ legacy Flask service.
 ## Setup
 
 - Use two different Supabase users: User A and User B.
-- Confirm Render has `OPENROUTER_API_KEY`, Supabase server credentials, and
-  the exact Vercel origin in `FRONTEND_URL`. No OpenAI key is required.
-- Confirm `FREE_MODEL=openrouter/free` and that the OpenRouter account has no
-  paid routing enabled for this application.
+- Confirm Render has `OPENAI_API_KEY`, `OPENROUTER_API_KEY`, Supabase server
+  credentials, and the exact Vercel origin in `FRONTEND_URL`.
 - Confirm `GET /api/health` returns `200`.
 
 ## Test flow

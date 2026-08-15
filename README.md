@@ -5,8 +5,9 @@ memory, image context, and chat merging.
 
 This branch replaces the deployment-time Flask/Chroma/HuggingFace runtime with:
 
-- Supabase Postgres full-text search for persistent, no-cost memory retrieval.
-- OpenRouter's `openrouter/free` router for no-cost answer generation and image descriptions.
+- OpenAI `text-embedding-3-small` for multilingual text embeddings.
+- Supabase Postgres + pgvector for persistent semantic memory.
+- OpenRouter for answer generation and image descriptions.
 - Render Free for the Node API and Vercel for the React frontend.
 
 The legacy `chatbot/` directory is rollback material only; it is not part of
@@ -19,7 +20,8 @@ flowchart LR
   U["User browser"] --> V["Vercel: React frontend"]
   V -->|"Bearer token + HTTPS"| A["Render: Node/Express API"]
   A --> AUTH["Supabase Auth: verify user"]
-  A -->|"store + text search"| DB["Supabase Postgres full-text search"]
+  A -->|"embed message/query"| E["OpenAI Embeddings"]
+  A -->|"store + semantic search"| DB["Supabase Postgres + pgvector"]
   A -->|"upload/download images"| S["Supabase Storage"]
   A -->|"answer + image description"| L["OpenRouter"]
   A --> V
@@ -31,15 +33,16 @@ flowchart LR
 | --- | --- | --- |
 | Login/session | Supabase Auth | Identifies the current user. |
 | Chat metadata and UI history | `chats` table | Restores sidebar and message history. |
-| Searchable message chunks | `chat_memory_chunks` | Full-text retrieval without an embedding provider. |
+| Searchable message chunks | `chat_memory_chunks` | Semantic retrieval with pgvector. |
 | Uploaded images | `chat_vectors` Storage bucket | Image context, owned by the authenticated user. |
-| OpenRouter API key | Render environment | Never sent to the browser. |
+| Embedding and model API keys | Render environment | Never sent to the browser. |
 
 ## Prerequisites
 
 - Node.js 20 or later.
 - A Supabase project with Auth and the existing `chats` table/bucket.
 - An OpenRouter API key for chat generation.
+- An OpenAI API key for embeddings.
 - A Vercel deployment of the `Brain-Hop` frontend.
 
 ## Local setup
@@ -53,7 +56,8 @@ flowchart LR
 SUPABASE_URL=https://your-project.supabase.co
 SUPABASE_KEY=your_service_role_key
 OPENROUTER_API_KEY=your_openrouter_key
-FREE_MODEL=openrouter/free
+OPENAI_API_KEY=your_openai_key
+EMBEDDING_MODEL=text-embedding-3-small
 PORT=3001
 FRONTEND_URL=http://localhost:5173
 CORS_ALLOWED_ORIGINS=http://localhost:8080
@@ -78,17 +82,15 @@ Before using chat memory, open Supabase Dashboard → SQL Editor and run:
 
 ```text
 supabase/migrations/20260815_pgvector_chat_memory.sql
-supabase/migrations/20260816_free_text_chat_memory.sql
 ```
 
-Run them in that order. Together they create `chat_memory_chunks`,
-enable RLS, replace vector storage with a PostgreSQL full-text index, and keep
-the chat-copy function. They do not delete old Chroma ZIP artifacts.
+The migration enables pgvector, creates `chat_memory_chunks`, enables RLS, and
+adds memory-match/copy functions. It does not delete old Chroma ZIP artifacts.
 
 ## Existing chat backfill
 
-Old Chroma vectors are not used. The backfill rebuilds searchable text rows
-from persisted `chats.chat` JSON history.
+Old Chroma vectors use a different embedding model and cannot be reused. The
+backfill rebuilds vectors from persisted `chats.chat` JSON history.
 
 ```powershell
 # Preview only
@@ -123,9 +125,7 @@ FRONTEND_URL=https://your-project.vercel.app
 CORS_ALLOWED_ORIGINS=https://app.yourdomain.com
 ```
 
-Set the health-check path to `/api/health`. No `OPENAI_API_KEY` is needed.
-Set `FREE_MODEL=openrouter/free` (or a specific model ending in `:free`) so
-frontend model selections cannot incur paid OpenRouter usage.
+Set the health-check path to `/api/health`.
 
 ### Vercel frontend
 
@@ -137,8 +137,8 @@ VITE_SUPABASE_ANON_KEY=your_supabase_anon_key
 VITE_API_BASE_URL=https://your-render-api.onrender.com
 ```
 
-Only the Supabase anon key belongs in Vercel. Never expose service-role or
-OpenRouter keys in frontend variables.
+Only the Supabase anon key belongs in Vercel. Never expose service-role,
+OpenAI, or OpenRouter keys in frontend variables.
 
 ## Verification
 
@@ -162,8 +162,5 @@ For rollout, rollback, and backfill detail, use
 ## Free-tier note
 
 Render Free can sleep after inactivity, so the first request after idle may be
-slow. The API has no PyTorch, Chroma, local model, or embedding API dependency,
-which removes the prior memory failure and the OpenAI embedding cost.
-OpenRouter free models are rate-limited and can be unavailable, so this setup is
-appropriate for personal use, testing, and low-volume demos rather than a
-reliable public production service.
+slow. The API no longer loads PyTorch, Chroma, or a local embedding model, which
+removes the prior memory failure.
