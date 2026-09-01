@@ -46,7 +46,17 @@ app.use('/api', (req, res, next) => {
   return next();
 });
 
-app.get('/api/health', (_req, res) => res.json({ status: 'ok', service: 'brain-hop-api' }));
+app.get('/api/health', async (_req, res) => {
+  try {
+    const { error } = await supabase.from('chats').select('chat_id').limit(1);
+    if (error) {
+      return res.status(200).json({ status: 'ok', service: 'brain-hop-api', db: 'degraded', error: error.message });
+    }
+    return res.json({ status: 'ok', service: 'brain-hop-api', db: 'connected' });
+  } catch (err) {
+    return res.status(200).json({ status: 'ok', service: 'brain-hop-api', db: 'error', error: err.message || String(err) });
+  }
+});
 app.get('/api/test', (_req, res) => res.json({ message: 'Hello from the backend!' }));
 
 function authRoute(handler, fallbackStatus) {
