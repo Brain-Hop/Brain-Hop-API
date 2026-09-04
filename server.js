@@ -177,6 +177,19 @@ app.post('/api/chats/sync', requireAuth, async (req, res) => {
   return res.status(errors.length ? 502 : 200).json({ synced: results.length - errors.length, failed: errors.length, errors });
 });
 
+app.delete('/api/chats', requireAuth, async (req, res) => {
+  try {
+    const { error: memError } = await supabase.from('chat_memory_chunks').delete().eq('user_id', req.user.id);
+    if (memError) console.warn('[ALL CHATS DELETE] Memory chunks clear error:', memError.message);
+    const { error } = await supabase.from('chats').delete().eq('user_id', req.user.id);
+    if (error) throw error;
+    return res.json({ deleted: true, count: 'all' });
+  } catch (error) {
+    console.error('[ALL CHATS DELETE] Failed:', error.message || error);
+    return res.status(500).json({ error: 'Unable to delete all chats. Please try again.' });
+  }
+});
+
 app.delete('/api/chats/:chatId', requireAuth, async (req, res) => {
   const { chatId } = req.params;
   if (!/^[0-9a-f-]{36}$/i.test(chatId)) return res.status(400).json({ error: 'Invalid chat id' });
